@@ -133,3 +133,73 @@ representing a fixed MVP feature list.
    - User-generated content and external input are untrusted.
    - Security, privacy, authentication, authorization, and database
      protections should be designed into the system from the beginning.
+
+
+## 2. MVP Social Features
+
+### Following
+
+Following is part of the MVP.
+
+Users can:
+
+- Follow another user
+- Unfollow another user
+- See whether they follow a user
+- View follower and following counts
+- Open a user's profile
+- See public posts from users they follow
+
+Following should gradually make the Home feed more personally relevant.
+
+### Direct Messages
+
+Basic direct messaging is part of the early product roadmap.
+
+The intended purpose is to let users communicate with friends and share
+discoveries with them.
+
+Potential capabilities:
+
+- One-to-one conversations
+- Text messages
+- Share a post
+- Share a collection
+- Block another user
+- Report abusive messages or users
+
+The initial implementation should remain intentionally simple.
+
+### Chat Rooms
+
+Group chat rooms are a planned feature.
+
+Potential capabilities:
+
+- Create a room with friends
+- Invite members
+- Remove members where appropriate
+- Send messages
+- Share posts
+- Share collections
+- Leave a room
+
+Full-featured realtime chat should be implemented after the core discovery
+loop has been validated.
+
+### Messaging Scope
+
+Messaging should not become the primary focus of the initial MVP.
+
+The architecture should leave room for:
+
+- Realtime messaging
+- Message notifications
+- Media sharing
+- Read receipts
+- Typing indicators
+- Message reactions
+- Larger group conversations
+
+These features are intentionally deferred until the basic messaging
+experience and core discovery loop are validated.
