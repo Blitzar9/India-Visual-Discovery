@@ -203,3 +203,63 @@ The architecture should leave room for:
 
 These features are intentionally deferred until the basic messaging
 experience and core discovery loop are validated.
+
+## 3. Authentication & Onboarding
+
+### Authentication
+
+The MVP should support:
+
+- Google OAuth
+- Apple Sign In
+- Email and password
+- Phone number with OTP
+
+Phone number is optional unless the user chooses phone-based
+authentication or a later product/security requirement explicitly
+requires verification.
+
+Authentication should be handled through Supabase Auth rather than
+custom-built authentication.
+
+### New User Flow
+
+A new user follows this flow:
+
+1. Open the app
+2. Sign up or log in
+3. Complete authentication
+4. Create their profile
+5. Select interests
+6. Enter the main discovery experience
+
+### Profile Setup
+
+Basic profile setup is required before a new user can enter the main app.
+
+Required:
+
+- Unique username
+- Display name
+- Profile avatar
+- Interests
+
+Optional:
+
+- Gender
+- Bio
+- City
+
+Users who do not want to upload a personal photo can use a
+generated/default avatar.
+
+Profile information can be edited later from profile settings.
+
+### Onboarding Principles
+
+- Keep onboarding short and simple.
+- Require only a small amount of information.
+- Do not require a personal photograph.
+- Use interests to provide an initial basis for relevant discovery.
+- Do not ask for unnecessary personal information.
+- Do not prevent users from changing their profile information later.
