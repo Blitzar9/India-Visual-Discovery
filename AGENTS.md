@@ -13,6 +13,7 @@
 - Do not introduce new dependencies unless they are necessary.
 - Prefer stable, well-supported packages.
 - Do not make architectural decisions silently. If a requirement is ambiguous, ask first.
+- Do not introduce a media-storage or video-processing architecture without an explicit project decision.
 
 ## Security
 - Never expose, print, hard-code, or commit secrets, API keys, tokens, passwords, or private credentials.

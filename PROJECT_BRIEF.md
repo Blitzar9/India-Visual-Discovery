@@ -263,3 +263,153 @@ Profile information can be edited later from profile settings.
 - Use interests to provide an initial basis for relevant discovery.
 - Do not ask for unnecessary personal information.
 - Do not prevent users from changing their profile information later.
+
+## 4. Discovery Experience
+
+### Home
+
+Home is the user's personalized discovery feed.
+
+It should primarily contain:
+
+- Posts related to selected interests
+- Posts from users the person follows
+- Relevant recent content
+- Visual-first post cards
+
+The initial personalization system should remain simple and should not
+require recommendation AI.
+
+### Explore
+
+Explore is the user's open-ended discovery and search experience.
+
+It should help users discover:
+
+- Places
+- Topics
+- Categories
+- New creators/users
+- Recent content
+- Popular or emerging content
+
+Home answers:
+
+> "What might I like?"
+
+Explore answers:
+
+> "What can I discover?"
+
+Home and Explore should remain distinct experiences rather than becoming
+two versions of the same feed.
+
+## 5. Content & Posts
+
+### Post Types
+
+Users can create:
+
+1. Single-photo posts
+2. Multi-photo carousel posts
+3. Video posts
+4. Text/visual posts created using in-app editing tools
+5. Photo posts with voice-over
+6. Stories
+
+### Post Metadata
+
+Posts can contain:
+
+- Caption
+- Place/location
+- Tags
+- User tags
+- Interests/categories
+- Creator information
+- Creation date
+- Likes
+- Saves
+- Comments
+- Shares
+
+### Place Association
+
+A post can be associated with a real Place entity.
+
+Place information should be modeled separately from free-form location
+text so that posts can be grouped together on Place pages.
+
+This creates the relationship:
+
+User → Place → Posts → Time → Experiences
+
+### Creation & Editing
+
+The MVP creation experience should support simple visual editing,
+including:
+
+- Photo selection
+- Video selection
+- Photo ordering
+- Cropping
+- Adding text
+- Basic text positioning
+- Basic typography options
+- Simple visual layouts
+- Voice-over recording
+
+The MVP should not attempt to replicate the complexity of professional
+design or video-editing applications.
+
+### Carousels
+
+Users can combine multiple photos into a single post.
+
+Users should be able to:
+
+- Add multiple photos
+- Reorder photos
+- Remove photos
+- Preview the carousel
+- Publish it as one post
+
+### Video
+
+Video posts are supported in the MVP.
+
+The initial video experience should remain simple:
+
+- Select or upload a video
+- Preview the video
+- Add caption and metadata
+- Add location and tags
+- Publish
+
+The project must not assume that storing and delivering original video
+files indefinitely is the final scalable architecture.
+
+Media storage, video processing, transcoding, CDN/delivery, bandwidth,
+storage costs, upload limits, and lifecycle management must be evaluated
+before finalizing the production media architecture.
+
+The database should store media metadata and references rather than
+embedding large media files directly in database records.
+
+### Stories
+
+Stories are temporary visual content and are separate from permanent
+posts.
+
+Stories may support:
+
+- Photos
+- Videos
+- Text
+- Simple visual editing
+- Location
+- Tags
+- Voice/audio where appropriate
+
+Stories should have a separate lifecycle from permanent posts and should
+not automatically become part of a user's permanent post history.
