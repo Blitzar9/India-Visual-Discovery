@@ -16,13 +16,20 @@ create table public.profiles (
 );
 
 -- Auto-create a profile row the moment someone signs up.
+-- SECURITY DEFINER hardened with a fixed search_path: without it, the function's
+-- unqualified name resolution follows the caller's search_path, letting a
+-- malicious schema shadow objects the function touches.
 create or replace function public.handle_new_user()
-returns trigger language plpgsql security definer as $$
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
 begin
   insert into public.profiles (id, username, display_name)
   values (
     new.id,
-    coalesce(nullif(new.raw_user_meta_data->>'username', ''), 'user_' || substr(new.id::text, 1, 8)),
+    coalesce(nullif(new.raw_user_meta_data->>'username', ''), 'user_' || replace(new.id::text, '-', '')),
     coalesce(nullif(new.raw_user_meta_data->>'display_name', ''), nullif(new.raw_user_meta_data->>'username', ''))
   )
   on conflict (id) do nothing;
