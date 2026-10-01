@@ -7,20 +7,35 @@ import '@/global.css';
 
 import { Platform } from 'react-native';
 
+/**
+ * Editorial, calm palette for India Visual Discovery.
+ * Warm paper backgrounds, warm ink text, one restrained accent (fired clay).
+ * Both schemes stay low-contrast and whitespace-friendly.
+ */
 export const Colors = {
   light: {
-    text: '#000000',
-    background: '#ffffff',
-    backgroundElement: '#F0F0F3',
-    backgroundSelected: '#E0E1E6',
-    textSecondary: '#60646C',
+    text: '#211C14',
+    background: '#FAF7F0',
+    backgroundElement: '#F1EAE0',
+    backgroundSelected: '#E7DCCB',
+    textSecondary: '#8A8072',
+    accent: '#B4552A',
+    accentSoft: '#F5E4D2',
+    accentInk: '#FFFFFF',
+    line: '#E7DDC9',
+    card: '#FFFFFF',
   },
   dark: {
-    text: '#ffffff',
-    background: '#000000',
-    backgroundElement: '#212225',
-    backgroundSelected: '#2E3135',
-    textSecondary: '#B0B4BA',
+    text: '#F3EDE1',
+    background: '#15120E',
+    backgroundElement: '#221E17',
+    backgroundSelected: '#2E2820',
+    textSecondary: '#A79E8D',
+    accent: '#D98A52',
+    accentSoft: '#33241A',
+    accentInk: '#15120E',
+    line: '#2D2620',
+    card: '#1E1A15',
   },
 } as const;
 
@@ -59,6 +74,24 @@ export const Spacing = {
   four: 24,
   five: 32,
   six: 64,
+} as const;
+
+/**
+ * Section rhythm loosely inspired by the golden ratio: card gaps of 24,
+ * section gaps of ~40 (24 * 1.618), generous page padding of 20.
+ */
+export const Rhythm = {
+  page: 20,
+  cardGap: 24,
+  sectionGap: 40,
+  hairline: 1,
+} as const;
+
+export const Radius = {
+  small: 10,
+  medium: 16,
+  large: 24,
+  pill: 999,
 } as const;
 
 export const BottomTabInset = Platform.select({ ios: 50, android: 80 }) ?? 0;
