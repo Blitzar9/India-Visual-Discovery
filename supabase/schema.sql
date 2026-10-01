@@ -206,13 +206,20 @@ create trigger set_collections_updated_at before update on public.collections
 -- status='deleted': the row, its saves, likes, comments and collection
 -- memberships are all preserved. Plain (non-definer) function running as the
 -- caller, who already holds UPDATE rights via the authors policy.
--- Account deletion does NOT use this trigger — see delete_own_account().
+-- Account deletion passes through this trigger via the transaction-local
+-- hard-purge flag — see delete_own_account().
 create or replace function public.soft_delete_post()
 returns trigger
 language plpgsql
 set search_path = public
 as $$
 begin
+  -- Controlled hard purge: this transaction explicitly opted in through the
+  -- transaction-local app.hard_purge flag (set only by delete_own_account()),
+  -- so let the delete — and its cascades — proceed for real.
+  if current_setting('app.hard_purge', true) = 'on' then
+    return old;
+  end if;
   update public.posts
   set status = 'deleted', updated_at = now()
   where id = old.id;
@@ -224,12 +231,13 @@ create trigger posts_soft_delete before delete on public.posts
   for each row execute function public.soft_delete_post();
 
 -- ── Account deletion (controlled purge) ──────────────────────────────────
--- The application calls this RPC to delete an account. It briefly disables
--- posts_soft_delete so the profile DELETE cascades through posts and all
--- dependent rows for real, then re-enables the trigger — always, even if the
--- delete fails. Self-service only: a caller can delete nobody's account but
--- their own. (The Supabase Auth user itself is removed via the Admin API
--- with the service key — not in the database.)
+-- The application calls this RPC to delete an account. It sets the
+-- transaction-local app.hard_purge flag so the profile DELETE cascades
+-- through posts and all dependent rows for real — scoped to this
+-- transaction only, with no table-wide trigger disable. Self-service only:
+-- a caller can delete nobody's account but their own. (The Supabase Auth
+-- user itself is removed via the Admin API with the service key — not in
+-- the database.)
 create or replace function public.delete_own_account()
 returns void
 language plpgsql
@@ -240,14 +248,15 @@ begin
   if auth.uid() is null then
     raise exception 'not authenticated';
   end if;
-  alter table public.posts disable trigger posts_soft_delete;
-  begin
-    delete from public.profiles where id = auth.uid();
-  exception when others then
-    alter table public.posts enable trigger posts_soft_delete;
-    raise;
-  end;
-  alter table public.posts enable trigger posts_soft_delete;
+  -- Transaction-local opt-in for the hard purge below. SET LOCAL vanishes at
+  -- transaction end, so it can never leak to another session through the
+  -- pooler; and ordinary API clients have no way to issue SET themselves —
+  -- PostgREST exposes no raw SQL, only tables and RPCs, and no other function
+  -- touches this flag.
+  perform set_config('app.hard_purge', 'on', true);
+  delete from public.profiles where id = auth.uid();
+  -- No cleanup needed: if the delete raises, the transaction aborts and the
+  -- LOCAL setting evaporates with it.
 end;
 $$;
 
@@ -258,16 +267,19 @@ grant execute on function public.delete_own_account() to authenticated;
 -- - Normal application post deletion is SOFT: the posts_soft_delete trigger
 --   converts DELETE on posts into status='deleted'. The row and all its
 --   saves, likes, comments and collection memberships are preserved.
--- - ACCOUNT DELETION is an explicit controlled purge and does NOT go through
---   the soft-delete trigger: the app calls public.delete_own_account(),
---   which disables posts_soft_delete, deletes the profile (hard-cascading
---   its posts, collections, saves, follows, likes and comments), and
---   re-enables the trigger — exception-safe. Never DELETE FROM profiles
---   directly: the trigger would intercept the cascaded post deletes and the
---   profile delete would fail on the FK.
+-- - ACCOUNT DELETION is an explicit controlled purge: the app calls
+--   public.delete_own_account(), which sets the transaction-local
+--   app.hard_purge flag and deletes the profile (hard-cascading its posts,
+--   collections, saves, follows, likes and comments). posts_soft_delete
+--   lets a delete through only when that flag is set in the current
+--   transaction; the flag is unsettable through the API, vanishes at
+--   transaction end, and can never leak to another session via the pooler.
+--   Never DELETE FROM profiles directly: without the flag, the trigger
+--   converts the cascaded post deletes to soft-deletes and the profile
+--   delete fails on the FK.
 -- - App roles can never hard-delete an individual post; real removal of a
---   single post happens only through a manual DBA purge with the trigger
---   disabled.
+--   single post happens only through a manual DBA purge that sets the
+--   transaction-local app.hard_purge flag for its own transaction.
 -- - A hard-deleted post cascades its post_media ROWS, likes, comments, saves
 --   (and thereby their collection memberships). The STORAGE OBJECTS (files)
 --   are NOT removed by the database — the application must delete the
