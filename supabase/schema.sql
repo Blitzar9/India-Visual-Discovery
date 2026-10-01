@@ -15,6 +15,12 @@
 -- memberships can grow without bound. The application MUST paginate every
 -- such list (keyset on (created_at, id) recommended). No server-side
 -- caching, materialized feeds, or ranking infrastructure in this MVP.
+--
+-- PUBLIC COLLECTIONS: public_collection_posts is a security-definer view
+-- exposing (collection_id, post_id, place_id, sort_order, added_at) for
+-- public collections only — no save_id, no user_id.
+-- SOFT DELETE: the posts_soft_delete trigger converts DELETE on posts into
+-- status='deleted'; hard delete is a controlled purge (see below).
 
 -- ── profiles ─────────────────────────────────────────────────────────────
 create table public.profiles (
@@ -194,16 +200,44 @@ create trigger set_comments_updated_at before update on public.comments
 create trigger set_collections_updated_at before update on public.collections
   for each row execute function public.set_updated_at();
 
+-- ── Soft delete for posts ──────────────────────────────────────────────────
+-- The application's normal "delete post" action is converted into
+-- status='deleted': the row, its saves, likes, comments and collection
+-- memberships are all preserved. Plain (non-definer) function running as the
+-- caller, who already holds UPDATE rights via the authors policy.
+create or replace function public.soft_delete_post()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  update public.posts
+  set status = 'deleted', updated_at = now()
+  where id = old.id;
+  return null;  -- cancel the hard delete
+end;
+$$;
+
+create trigger posts_soft_delete before delete on public.posts
+  for each row execute function public.soft_delete_post();
+
 -- ── DELETION SEMANTICS (deliberate — read before changing) ────────────────
+-- - Normal application post deletion is SOFT: the posts_soft_delete trigger
+--   converts DELETE on posts into status='deleted'. The row and all its
+--   saves, likes, comments and collection memberships are preserved.
+-- - Hard-delete cascades remain as a CONTROLLED PURGE mechanism only: the
+--   trigger intercepts every DELETE on posts (including cascades from
+--   profile deletion), so a purge must first disable it — ALTER TABLE
+--   public.posts DISABLE TRIGGER posts_soft_delete (requires table
+--   ownership) — then DELETE, then re-enable. App roles can never
+--   hard-delete a post, and profile removal goes through the same purge path.
+-- - A hard-deleted post cascades its post_media ROWS, likes, comments, saves
+--   (and thereby their collection memberships). The STORAGE OBJECTS (files)
+--   are NOT removed by the database — the application must delete the
+--   post-media files on post delete.
 -- - Deleting a collection never deletes posts (no FK from posts to collections).
 -- - Deleting a save never deletes the post (saves references posts).
 -- - Removing a collection_saves row never deletes the underlying save.
--- - Deleting a post hard-cascades its post_media ROWS, likes, comments, saves
---   (and thereby their collection memberships). The STORAGE OBJECTS (files)
---   are NOT removed by the database — the application must delete the
---   post-media files on post delete. Prefer soft-delete via status='deleted'.
--- - Deleting a profile cascades its posts, collections, saves, follows,
---   likes and comments (full account removal).
 -- - Deleting a place sets posts.place_id to null (posts survive).
 
 -- ── Row Level Security ───────────────────────────────────────────────────
@@ -359,3 +393,32 @@ create policy "post-media owners update"
 create policy "post-media owners delete"
   on storage.objects for delete
   using (bucket_id = 'post-media' and auth.uid()::text = (storage.foldername(name))[1]);
+
+-- ── Public collection contents (read-only view) ────────────────────────────
+-- Narrowly scoped read path so anyone can render a PUBLIC collection without
+-- touching the RLS-protected saves table. Runs with the view owner's
+-- privileges (requires Postgres 15+), but the public-only restriction is
+-- structural — baked into the WHERE clause — so it cannot leak private data
+-- even if RLS were evaluated as the caller. Exposes no save_id and no user_id.
+-- The owner keeps full access to their own data via collection_saves (which
+-- also shows their non-published posts); this view is the public rendering
+-- path and therefore shows only published posts.
+create or replace view public.public_collection_posts
+with (security_invoker = false) as
+select
+  cs.collection_id,
+  s.post_id,
+  p.place_id,
+  row_number() over (
+    partition by cs.collection_id
+    order by cs.created_at asc, s.id asc
+  ) as sort_order,
+  cs.created_at as added_at
+from public.collection_saves cs
+join public.saves s on s.id = cs.save_id
+join public.posts p on p.id = s.post_id
+join public.collections c on c.id = cs.collection_id
+where c.is_private = false
+  and p.status = 'published';
+
+grant select on public.public_collection_posts to anon, authenticated;
