@@ -413,3 +413,11 @@ Stories may support:
 
 Stories should have a separate lifecycle from permanent posts and should
 not automatically become part of a user's permanent post history.
+
+### Visual Identity & Interaction
+
+India Visual Discovery should have a distinctive visual language rather than closely replicating existing social-media interfaces.
+- Layout, spacing, typography, color, imagery, component placement, animation, and interaction feedback should be designed as a coherent system.
+- The design may use principles such as golden-ratio-inspired proportions, visual hierarchy, asymmetry, whitespace, and editorial composition where they improve aesthetics and usability. These principles should guide design rather than function as rigid mathematical constraints.
+- Motion should be purposeful, responsive, subtle, and consistent. Animations should communicate relationships and state changes rather than exist purely for decoration.
+- Accessibility, readability, touch targets, responsiveness, and performance take priority over aesthetic rules.
