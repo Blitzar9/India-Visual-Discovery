@@ -20,7 +20,8 @@
 -- exposing (collection_id, post_id, place_id, sort_order, added_at) for
 -- public collections only — no save_id, no user_id.
 -- SOFT DELETE: the posts_soft_delete trigger converts DELETE on posts into
--- status='deleted'; hard delete is a controlled purge (see below).
+-- status='deleted'; hard delete is a controlled purge (see below). Account
+-- deletion uses the delete_own_account() RPC (see below).
 
 -- ── profiles ─────────────────────────────────────────────────────────────
 create table public.profiles (
@@ -205,6 +206,7 @@ create trigger set_collections_updated_at before update on public.collections
 -- status='deleted': the row, its saves, likes, comments and collection
 -- memberships are all preserved. Plain (non-definer) function running as the
 -- caller, who already holds UPDATE rights via the authors policy.
+-- Account deletion does NOT use this trigger — see delete_own_account().
 create or replace function public.soft_delete_post()
 returns trigger
 language plpgsql
@@ -221,20 +223,55 @@ $$;
 create trigger posts_soft_delete before delete on public.posts
   for each row execute function public.soft_delete_post();
 
+-- ── Account deletion (controlled purge) ──────────────────────────────────
+-- The application calls this RPC to delete an account. It briefly disables
+-- posts_soft_delete so the profile DELETE cascades through posts and all
+-- dependent rows for real, then re-enables the trigger — always, even if the
+-- delete fails. Self-service only: a caller can delete nobody's account but
+-- their own. (The Supabase Auth user itself is removed via the Admin API
+-- with the service key — not in the database.)
+create or replace function public.delete_own_account()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+  alter table public.posts disable trigger posts_soft_delete;
+  begin
+    delete from public.profiles where id = auth.uid();
+  exception when others then
+    alter table public.posts enable trigger posts_soft_delete;
+    raise;
+  end;
+  alter table public.posts enable trigger posts_soft_delete;
+end;
+$$;
+
+revoke execute on function public.delete_own_account() from public;
+grant execute on function public.delete_own_account() to authenticated;
+
 -- ── DELETION SEMANTICS (deliberate — read before changing) ────────────────
 -- - Normal application post deletion is SOFT: the posts_soft_delete trigger
 --   converts DELETE on posts into status='deleted'. The row and all its
 --   saves, likes, comments and collection memberships are preserved.
--- - Hard-delete cascades remain as a CONTROLLED PURGE mechanism only: the
---   trigger intercepts every DELETE on posts (including cascades from
---   profile deletion), so a purge must first disable it — ALTER TABLE
---   public.posts DISABLE TRIGGER posts_soft_delete (requires table
---   ownership) — then DELETE, then re-enable. App roles can never
---   hard-delete a post, and profile removal goes through the same purge path.
+-- - ACCOUNT DELETION is an explicit controlled purge and does NOT go through
+--   the soft-delete trigger: the app calls public.delete_own_account(),
+--   which disables posts_soft_delete, deletes the profile (hard-cascading
+--   its posts, collections, saves, follows, likes and comments), and
+--   re-enables the trigger — exception-safe. Never DELETE FROM profiles
+--   directly: the trigger would intercept the cascaded post deletes and the
+--   profile delete would fail on the FK.
+-- - App roles can never hard-delete an individual post; real removal of a
+--   single post happens only through a manual DBA purge with the trigger
+--   disabled.
 -- - A hard-deleted post cascades its post_media ROWS, likes, comments, saves
 --   (and thereby their collection memberships). The STORAGE OBJECTS (files)
 --   are NOT removed by the database — the application must delete the
---   post-media files on post delete.
+--   post-media files on post delete, and on account deletion.
 -- - Deleting a collection never deletes posts (no FK from posts to collections).
 -- - Deleting a save never deletes the post (saves references posts).
 -- - Removing a collection_saves row never deletes the underlying save.
@@ -276,7 +313,13 @@ create policy "authors manage own posts" on public.posts
   for all using (auth.uid() = author_id) with check (auth.uid() = author_id);
 
 -- post_media: everyone reads; only the post's author writes
-create policy "post media readable by all" on public.post_media for select using (true);
+-- post_media: public reads see only media of published posts (the bucket
+-- itself is public, so storage_path must not leak for draft/deleted posts)
+create policy "post media readable by all" on public.post_media
+  for select using (exists (
+    select 1 from public.posts p
+    where p.id = post_media.post_id and p.status = 'published'
+  ));
 create policy "post authors manage media" on public.post_media for all using (
   exists (select 1 from public.posts p where p.id = post_media.post_id and p.author_id = auth.uid())
 ) with check (
@@ -284,7 +327,12 @@ create policy "post authors manage media" on public.post_media for all using (
 );
 
 -- post_tags: everyone reads; post authors write
-create policy "post tags readable by all" on public.post_tags for select using (true);
+-- post_tags: public reads see only tags of published posts
+create policy "post tags readable by all" on public.post_tags
+  for select using (exists (
+    select 1 from public.posts p
+    where p.id = post_tags.post_id and p.status = 'published'
+  ));
 create policy "post authors manage post tags" on public.post_tags for all using (
   exists (select 1 from public.posts p where p.id = post_tags.post_id and p.author_id = auth.uid())
 ) with check (
@@ -307,8 +355,8 @@ create policy "users manage own saves" on public.saves
 -- or when the referenced collection is public (is_private = false).
 -- A public collection exposes only opaque save_ids through this junction;
 -- the saves rows themselves stay owner-readable, so no private save data
--- leaks. (Post bodies are public content; resolving a public collection's
--- save_ids to posts is an application-layer concern.)
+-- leaks. Public rendering of a collection's posts goes through the
+-- public_collection_posts view (no save_id, no user_id exposed).
 create policy "collection memberships readable" on public.collection_saves
   for select using (
     exists (select 1 from public.collections c
@@ -357,19 +405,34 @@ create policy "users manage own follows" on public.follows
   for all using (auth.uid() = follower_id) with check (auth.uid() = follower_id);
 
 -- likes: everyone reads; users manage their own
-create policy "likes readable by all" on public.likes for select using (true);
+-- likes: public reads see only likes on published posts
+create policy "likes readable by all" on public.likes
+  for select using (exists (
+    select 1 from public.posts p
+    where p.id = likes.post_id and p.status = 'published'
+  ));
 create policy "users manage own likes" on public.likes
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
--- comments: public reads see only published comments; authors see and
--- manage their own comments in any status
+-- comments: public reads see only published comments on published posts;
+-- authors see and manage their own comments in any status
 create policy "published comments readable by all" on public.comments
-  for select using (status = 'published');
+  for select using (
+    status = 'published'
+    and exists (select 1 from public.posts p
+                where p.id = comments.post_id and p.status = 'published')
+  );
 create policy "authors manage own comments" on public.comments
   for all using (auth.uid() = author_id) with check (auth.uid() = author_id);
 
 -- ── Storage: post-media bucket ─────────────────────────────────────────────
 -- Path convention: {user_id}/{post_id}/{filename}
+-- FOLLOW-UP (not implemented): a strict post_id ownership check — verifying
+-- foldername(name)[2] against posts.id / posts.author_id — would bind each
+-- file to a real post owned by the uploader. Deferred: it changes the upload
+-- path contract, and a malformed path segment would raise a cast error inside
+-- the policy and fail the whole query. The user-folder restriction below
+-- must not be weakened in the meantime.
 insert into storage.buckets (id, name, public)
 values ('post-media', 'post-media', true)
 on conflict (id) do nothing;
