@@ -94,16 +94,25 @@ create table public.collections (
 );
 
 -- ── saves ────────────────────────────────────────────────────────────────
+-- One row per user per post: the save itself. Collection membership lives in
+-- collection_saves, so a saved post can sit in zero, one, or many collections.
 create table public.saves (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.profiles (id) on delete cascade,
   post_id uuid not null references public.posts (id) on delete cascade,
-  collection_id uuid references public.collections (id) on delete set null,
   created_at timestamptz not null default now(),
   unique (user_id, post_id)
 );
 create index saves_user_idx on public.saves (user_id, created_at desc);
-create index saves_collection_idx on public.saves (collection_id);
+
+-- ── collection_saves (junction) ──────────────────────────────────────────
+create table public.collection_saves (
+  collection_id uuid not null references public.collections (id) on delete cascade,
+  save_id uuid not null references public.saves (id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (collection_id, save_id)
+);
+create index collection_saves_save_idx on public.collection_saves (save_id);
 
 -- ── follows ──────────────────────────────────────────────────────────────
 create table public.follows (
@@ -139,6 +148,7 @@ alter table public.post_media   enable row level security;
 alter table public.tags         enable row level security;
 alter table public.post_tags    enable row level security;
 alter table public.collections  enable row level security;
+alter table public.collection_saves enable row level security;
 alter table public.saves        enable row level security;
 alter table public.follows      enable row level security;
 alter table public.likes        enable row level security;
@@ -189,6 +199,21 @@ create policy "owners manage own collections" on public.collections
 -- saves: users see and manage only their own
 create policy "users manage own saves" on public.saves
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- collection_saves: membership is allowed only when the user owns BOTH the
+-- save and the collection. Reads are owner-scoped too, matching saves.
+create policy "users manage own collection memberships" on public.collection_saves
+  for all using (
+    exists (select 1 from public.saves s
+            where s.id = collection_saves.save_id and s.user_id = auth.uid())
+    and exists (select 1 from public.collections c
+            where c.id = collection_saves.collection_id and c.owner_id = auth.uid())
+  ) with check (
+    exists (select 1 from public.saves s
+            where s.id = collection_saves.save_id and s.user_id = auth.uid())
+    and exists (select 1 from public.collections c
+            where c.id = collection_saves.collection_id and c.owner_id = auth.uid())
+  );
 
 -- follows: everyone reads; users manage their own follow rows
 create policy "follows readable by all" on public.follows for select using (true);
