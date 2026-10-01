@@ -1,7 +1,20 @@
--- India Visual Discovery — MVP schema (Priority 2)
--- Apply in the Supabase SQL editor, top to bottom, in one go.
+-- India Visual Discovery — MVP schema
+-- INITIAL MIGRATION, single-run: apply in the Supabase SQL editor, top to
+-- bottom, on a fresh project. Not written to be rerunnable (no IF NOT EXISTS
+-- / DROP guards) — rerunning against a live database would error on existing
+-- objects rather than silently drifting the schema.
 -- Tables follow the DATA_MODEL.md entity names. RLS is ON everywhere;
 -- policies are deliberately simple for the MVP vertical slice.
+--
+-- STATUS LIFECYCLE: posts and comments carry a simple status
+-- ('published' / 'draft' [posts only] / 'deleted' / 'moderated'). Public
+-- SELECT policies expose only status='published'. No moderation workflow,
+-- no nested replies, no scheduled publishing in this MVP.
+--
+-- PAGINATION: posts, comments, likes, saves, follows and collection
+-- memberships can grow without bound. The application MUST paginate every
+-- such list (keyset on (created_at, id) recommended). No server-side
+-- caching, materialized feeds, or ranking infrastructure in this MVP.
 
 -- ── profiles ─────────────────────────────────────────────────────────────
 create table public.profiles (
@@ -12,7 +25,8 @@ create table public.profiles (
   city text,
   interests text[] not null default '{}',
   bio text,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 
 -- Auto-create a profile row the moment someone signs up.
@@ -58,8 +72,15 @@ create table public.posts (
   author_id uuid not null references public.profiles (id) on delete cascade,
   place_id uuid references public.places (id) on delete set null,
   body text not null default '',
-  created_at timestamptz not null default now()
+  status text not null default 'published'
+    check (status in ('published', 'draft', 'deleted', 'moderated')),
+  published_at timestamptz,  -- set by the app when status first becomes 'published'
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
+create index posts_author_idx on public.posts (author_id, created_at desc);
+create index posts_place_idx on public.posts (place_id, created_at desc);
+create index posts_created_idx on public.posts (created_at desc);
 
 -- ── post_media ───────────────────────────────────────────────────────────
 create table public.post_media (
@@ -90,7 +111,8 @@ create table public.collections (
   title text not null,
   description text not null default '',
   is_private boolean not null default true,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 
 -- ── saves ────────────────────────────────────────────────────────────────
@@ -104,6 +126,7 @@ create table public.saves (
   unique (user_id, post_id)
 );
 create index saves_user_idx on public.saves (user_id, created_at desc);
+create index saves_post_idx on public.saves (post_id, created_at desc);
 
 -- ── collection_saves (junction) ──────────────────────────────────────────
 create table public.collection_saves (
@@ -122,6 +145,10 @@ create table public.follows (
   primary key (follower_id, followee_id),
   check (follower_id <> followee_id)
 );
+-- who a user follows, chronological
+create index follows_follower_idx on public.follows (follower_id, created_at desc);
+-- who follows a user, chronological
+create index follows_followee_idx on public.follows (followee_id, created_at desc);
 
 -- ── likes / comments (wired later; tables ready) ──────────────────────────
 create table public.likes (
@@ -130,15 +157,54 @@ create table public.likes (
   created_at timestamptz not null default now(),
   primary key (user_id, post_id)
 );
+create index likes_post_idx on public.likes (post_id, created_at desc);
 
 create table public.comments (
   id uuid primary key default gen_random_uuid(),
   post_id uuid not null references public.posts (id) on delete cascade,
   author_id uuid not null references public.profiles (id) on delete cascade,
   body text not null,
-  created_at timestamptz not null default now()
+  status text not null default 'published'
+    check (status in ('published', 'deleted', 'moderated')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 create index comments_post_idx on public.comments (post_id, created_at);
+
+-- ── updated_at maintenance ───────────────────────────────────────────────
+-- One shared trigger function; not SECURITY DEFINER (needs no elevated
+-- privileges), but search_path is still pinned for hygiene.
+create or replace function public.set_updated_at()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+create trigger set_profiles_updated_at before update on public.profiles
+  for each row execute function public.set_updated_at();
+create trigger set_posts_updated_at before update on public.posts
+  for each row execute function public.set_updated_at();
+create trigger set_comments_updated_at before update on public.comments
+  for each row execute function public.set_updated_at();
+create trigger set_collections_updated_at before update on public.collections
+  for each row execute function public.set_updated_at();
+
+-- ── DELETION SEMANTICS (deliberate — read before changing) ────────────────
+-- - Deleting a collection never deletes posts (no FK from posts to collections).
+-- - Deleting a save never deletes the post (saves references posts).
+-- - Removing a collection_saves row never deletes the underlying save.
+-- - Deleting a post hard-cascades its post_media ROWS, likes, comments, saves
+--   (and thereby their collection memberships). The STORAGE OBJECTS (files)
+--   are NOT removed by the database — the application must delete the
+--   post-media files on post delete. Prefer soft-delete via status='deleted'.
+-- - Deleting a profile cascades its posts, collections, saves, follows,
+--   likes and comments (full account removal).
+-- - Deleting a place sets posts.place_id to null (posts survive).
 
 -- ── Row Level Security ───────────────────────────────────────────────────
 alter table public.profiles     enable row level security;
@@ -168,8 +234,10 @@ create policy "tags readable by all" on public.tags for select using (true);
 create policy "signed-in users add tags" on public.tags
   for insert with check (auth.role() = 'authenticated');
 
--- posts: everyone reads; authors write their own
-create policy "posts readable by all" on public.posts for select using (true);
+-- posts: public reads see only published posts; authors see and manage
+-- their own posts in any status (drafts, deleted, moderated)
+create policy "published posts readable by all" on public.posts
+  for select using (status = 'published');
 create policy "authors manage own posts" on public.posts
   for all using (auth.uid() = author_id) with check (auth.uid() = author_id);
 
@@ -200,15 +268,49 @@ create policy "owners manage own collections" on public.collections
 create policy "users manage own saves" on public.saves
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
--- collection_saves: membership is allowed only when the user owns BOTH the
--- save and the collection. Reads are owner-scoped too, matching saves.
-create policy "users manage own collection memberships" on public.collection_saves
-  for all using (
+-- collection_saves:
+-- SELECT is allowed when the caller owns both the save and the collection,
+-- or when the referenced collection is public (is_private = false).
+-- A public collection exposes only opaque save_ids through this junction;
+-- the saves rows themselves stay owner-readable, so no private save data
+-- leaks. (Post bodies are public content; resolving a public collection's
+-- save_ids to posts is an application-layer concern.)
+create policy "collection memberships readable" on public.collection_saves
+  for select using (
+    exists (select 1 from public.collections c
+            where c.id = collection_saves.collection_id and c.is_private = false)
+    or (exists (select 1 from public.saves s
+            where s.id = collection_saves.save_id and s.user_id = auth.uid())
+        and exists (select 1 from public.collections c
+            where c.id = collection_saves.collection_id and c.owner_id = auth.uid()))
+  );
+
+-- INSERT/UPDATE/DELETE stay strictly owner-only: the caller must own BOTH
+-- the save and the collection. Nobody can file somebody else's save into
+-- their collection, or vice versa.
+create policy "owners insert collection memberships" on public.collection_saves
+  for insert with check (
+    exists (select 1 from public.saves s
+            where s.id = collection_saves.save_id and s.user_id = auth.uid())
+    and exists (select 1 from public.collections c
+            where c.id = collection_saves.collection_id and c.owner_id = auth.uid())
+  );
+
+create policy "owners update collection memberships" on public.collection_saves
+  for update using (
     exists (select 1 from public.saves s
             where s.id = collection_saves.save_id and s.user_id = auth.uid())
     and exists (select 1 from public.collections c
             where c.id = collection_saves.collection_id and c.owner_id = auth.uid())
   ) with check (
+    exists (select 1 from public.saves s
+            where s.id = collection_saves.save_id and s.user_id = auth.uid())
+    and exists (select 1 from public.collections c
+            where c.id = collection_saves.collection_id and c.owner_id = auth.uid())
+  );
+
+create policy "owners delete collection memberships" on public.collection_saves
+  for delete using (
     exists (select 1 from public.saves s
             where s.id = collection_saves.save_id and s.user_id = auth.uid())
     and exists (select 1 from public.collections c
@@ -225,8 +327,10 @@ create policy "likes readable by all" on public.likes for select using (true);
 create policy "users manage own likes" on public.likes
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
--- comments: everyone reads; authors manage their own
-create policy "comments readable by all" on public.comments for select using (true);
+-- comments: public reads see only published comments; authors see and
+-- manage their own comments in any status
+create policy "published comments readable by all" on public.comments
+  for select using (status = 'published');
 create policy "authors manage own comments" on public.comments
   for all using (auth.uid() = author_id) with check (auth.uid() = author_id);
 
